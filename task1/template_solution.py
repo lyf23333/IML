@@ -4,7 +4,7 @@
 import numpy as np
 import pandas as pd
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import DotProduct, RBF, Matern, RationalQuadratic
+from sklearn.gaussian_process.kernels import DotProduct, RBF, Matern, RationalQuadratic, ExpSineSquared
 from sklearn.metrics import r2_score
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
@@ -50,6 +50,7 @@ def data_loading():
     test_df_ori = test_df
 
     y_train = train_df['price_CHF'].to_numpy()
+    nan_inds = np.isnan(y_train)
     non_nan_inds = np.logical_not(np.isnan(y_train))
 
     train_mean = train_df.drop(['season'],axis=1).mean()
@@ -70,23 +71,24 @@ def data_loading():
     X_test = np.where(X_test=="autumn", 0.75, X_test)
     X_test = np.where(X_test=="winter", 1., X_test)
 
-    # imp = IterativeImputer(max_iter=1000, random_state=0)
-    # X_train = X_train.astype(np.float32)
-    # X_test = X_test.astype(np.float32)
-    # imp = imp.fit(X_train)
-    # X_train = imp.transform(X_train)
-    # X_test = imp.transform(X_test)
+    imp = IterativeImputer(max_iter=1000, random_state=0)
+    X_train = X_train.astype(np.float32)
+    X_test = X_test.astype(np.float32)
+    imp = imp.fit(X_train)
+    X_train = imp.transform(X_train)
+    X_test = imp.transform(X_test)
 
     # normalize data
     min_max_scaler_train = MinMaxScaler()
     X_train_scaled = min_max_scaler_train.fit_transform(X_train)
     X_test_scaled = min_max_scaler_train.fit_transform(X_test)
 
-    y_train = y_train[non_nan_inds]
-    X_train_scaled = X_train_scaled[non_nan_inds]
+    y_train_labeled = y_train[non_nan_inds]
+    X_train_scaled_labeled = X_train_scaled[non_nan_inds]
+    X_train_scaled_unlabeled = X_train_scaled[nan_inds]
 
     # assert (X_train.shape[1] == X_test.shape[1]) and (X_train.shape[0] == y_train.shape[0]) and (X_test.shape[0] == 100), "Invalid data shape"
-    return X_train_scaled, y_train, X_test_scaled
+    return X_train_scaled_labeled, y_train_labeled, X_train_scaled_unlabeled, X_test_scaled
 
 def modeling_and_prediction(X_train, y_train, X_test):
     """
@@ -102,14 +104,51 @@ def modeling_and_prediction(X_train, y_train, X_test):
     ----------
     y_test: array of floats: dim = (100,), predictions on test set
     """
-
+    print("pre modeling process-------------------")
     y_pred=np.zeros(X_test.shape[0])
     #TODO: Define the model and fit it using training data. Then, use test data to make predictions
-    n_folds = 10
+    n_folds = 5
     gpr = GaussianProcessRegressor(kernel=RationalQuadratic())
 
     score_mat = np.zeros(n_folds)
-    kf = KFold(n_splits=n_folds)
+    kf = KFold(n_splits=n_folds, shuffle=True)
+    for j, (train_index, test_index) in enumerate(kf.split(X_train)):
+        gpr = gpr.fit(X_train[train_index], y_train[train_index])
+        y_p = gpr.predict(X_train[test_index])
+        y_label = y_train[test_index]
+        score_mat[j] = r2_score(y_label, y_p)
+    print("score matri: ", score_mat)
+    print("average score: ", np.mean(score_mat))
+
+    return y_pred, gpr
+
+
+def modeling_and_prediction_post(gpr, X_train_labeled, y_train_labeled, X_train_unlabeled, X_test):
+    """
+    This function defines the model, fits training data and then does the prediction with the test data 
+
+    Parameters
+    ----------
+    X_train: matrix of floats, training input with 10 features
+    y_train: array of floats, training output
+    X_test: matrix of floats: dim = (100, ?), test input with 10 features
+
+    Returns
+    ----------
+    y_test: array of floats: dim = (100,), predictions on test set
+    """
+    print("post modeling process-------------------")
+    y_label = gpr.predict(X_train_unlabeled)
+    y_train = np.concatenate((y_train_labeled, y_label))
+    X_train = np.concatenate((X_train_labeled, X_train_unlabeled), axis=0)
+
+    y_pred=np.zeros(X_test.shape[0])
+    #TODO: Define the model and fit it using training data. Then, use test data to make predictions
+    n_folds = 5
+    gpr = GaussianProcessRegressor(kernel=RationalQuadratic())
+
+    score_mat = np.zeros(n_folds)
+    kf = KFold(n_splits=n_folds, shuffle=True)
     for j, (train_index, test_index) in enumerate(kf.split(X_train)):
         gpr = gpr.fit(X_train[train_index], y_train[train_index])
         y_p = gpr.predict(X_train[test_index])
@@ -120,14 +159,17 @@ def modeling_and_prediction(X_train, y_train, X_test):
 
     y_pred = gpr.predict(X_test)
     assert y_pred.shape == (100,), "Invalid data shape"
-    return y_pred
+    return y_pred, gpr
+
 
 # Main function. You don't have to change this
 if __name__ == "__main__":
     # Data loading
-    X_train, y_train, X_test = data_loading()
+    X_train_labeled, y_train_labeled, X_train_unlabeled, X_test = data_loading()
     # The function retrieving optimal LR parameters
-    y_pred=modeling_and_prediction(X_train, y_train, X_test)
+    y_pred, gpr=modeling_and_prediction(X_train_labeled, y_train_labeled, X_test)
+
+    y_pred, gpr=modeling_and_prediction_post(gpr, X_train_labeled, y_train_labeled, X_train_unlabeled, X_test)
     # Save results in the required format
     dt = pd.DataFrame(y_pred) 
     dt.columns = ['price_CHF']
