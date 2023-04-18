@@ -3,6 +3,7 @@
 # First, we import necessary libraries:
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import DotProduct, RBF, Matern, RationalQuadratic, ExpSineSquared, WhiteKernel, ConstantKernel
 from sklearn.metrics import r2_score
@@ -50,7 +51,7 @@ def data_loading():
     test_df_ori = test_df
     # configs
     add_noise_and_expand = True
-    iterative_imputer = False
+    iterative_imputer = True
     # data points which have no labels are not used for learning
     y_train = train_df['price_CHF'].to_numpy()
     nan_inds = np.isnan(y_train)
@@ -68,13 +69,45 @@ def data_loading():
     # process seasons
     X_train = process_seasons(X_train)
     X_test = process_seasons(X_test)
+
+    # plot_data(X_train, save_name="train")
+    # plot_data(X_test, save_name="test")
+
     # iterative imputer
     if iterative_imputer:
+        # linear relationship between 1, 2, 3
         imp = IterativeImputer(max_iter=100, random_state=0)
-        imp = imp.fit(X_train)
-        X_train = imp.transform(X_train)
-        X_test = imp.transform(X_test)
-        # X_train = iterative_learning_impultation(X_train, train_df)
+        imp = imp.fit(X_train[:,1:4])
+        X_train[:,1:4] = imp.transform(X_train[:,1:4])
+        X_test[:,1:4] = imp.transform(X_test[:,1:4])
+        
+        # linear relationship between 5 and 7
+        imp = IterativeImputer(max_iter=100, random_state=0)
+        columns = np.concatenate((np.expand_dims(X_train[:,5], axis=1), np.expand_dims(X_train[:,7], axis=1)), axis=1)
+        imp = imp.fit(columns)
+        res = imp.transform(columns)
+        X_train[:,5] = res[:,0]
+        X_train[:,7] = res[:,1]
+        columns_test = np.concatenate((np.expand_dims(X_test[:,5], axis=1), np.expand_dims(X_test[:,7], axis=1)), axis=1)
+        res = imp.transform(columns_test)
+        X_test[:,5] = res[:,0]
+        X_test[:,7] = res[:,1]
+
+        # linear relationship between 8, 9
+        imp = IterativeImputer(max_iter=100, random_state=0)
+        imp = imp.fit(X_train[:,8:10])
+        X_train[:,8:10] = imp.transform(X_train[:,8:10])
+        X_test[:,8:10] = imp.transform(X_test[:,8:10])
+
+        # column 4, 6 hard to impute
+        train_mean = train_df_ori.drop(['season'],axis=1).mean().to_numpy()
+        X_train[:,4] = np.where(np.isnan(X_train[:,4]), train_mean[4], X_train[:,4])
+        X_train[:,6] = np.where(np.isnan(X_train[:,6]), train_mean[6], X_train[:,6])
+
+        test_mean = test_df_ori.drop(['season'],axis=1).mean().to_numpy()
+        X_test[:,4] = np.where(np.isnan(X_test[:,4]), test_mean[4], X_test[:,4])
+        X_test[:,6] = np.where(np.isnan(X_test[:,6]), test_mean[6], X_test[:,6])
+
     # normalize data
     min_max_scaler_train = MinMaxScaler()
     X_train_scaled = min_max_scaler_train.fit_transform(X_train)
@@ -114,9 +147,26 @@ def data_loading():
             X_test_expand = np.concatenate((X_test_expand, X), axis=0)
         X_test_scaled = X_test_expand
 
+    # plot_data(X_train, save_name="train_processed")
+    # plot_data(X_test, save_name="test_processed")
+
     # assert (X_train.shape[1] == X_test.shape[1]) and (X_train.shape[0] == y_train.shape[0]) and (X_test.shape[0] == 100), "Invalid data shape"
     return X_train_scaled_labeled, y_train_labeled, X_train_scaled_unlabeled, X_test_scaled
 
+def plot_data(X, save_name=""):
+    import matplotlib.pyplot as plt
+    start_ids = np.arange(1, 10)
+    compare_ids = np.arange(1, 10)
+    for start_id in start_ids:
+        fig, axs = plt.subplots(3,3, figsize=(12.8, 9.6))
+        for compare_id in compare_ids:
+            ax = axs[(compare_id-1)//3, (compare_id-1)%3]
+            ax.scatter(X[:,start_id], X[:,compare_id])
+            ax.set_xlabel(f"column {start_id}")
+            ax.set_ylabel(f"column {compare_id}")
+        plt.suptitle(f"Relationship between column {start_id} and all columns ")
+        plt.savefig(f"/home/yifan/Courses/IML/workspace/task1/{save_name}_{start_id}.png")
+    # plt.show()
 
 def iterative_learning_impultation(X_train, train_df):
     gpr_models = [GaussianProcessRegressor(kernel=DotProduct(), alpha=1e-9)] * X_train.shape[1]
@@ -212,8 +262,8 @@ def modeling_and_prediction(X_train, y_train, X_test):
         end_time = time.time()
         print(f"{j}th round took {end_time - start_time}s")
         print(f"r2 score for round {j}: {score_mat[j]}")
-    #     if j ==0:
-    #         break
+        if j ==0:
+            break
 
     print("score matri: ", score_mat)
     print("average score: ", np.mean(score_mat))
