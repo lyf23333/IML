@@ -50,7 +50,7 @@ def data_loading():
     train_df_ori = train_df
     test_df_ori = test_df
     # configs
-    add_noise_and_expand = True
+    add_noise_and_expand = False
     iterative_imputer = True
     # data points which have no labels are not used for learning
     y_train = train_df['price_CHF'].to_numpy()
@@ -74,6 +74,8 @@ def data_loading():
     # plot_data(X_test, save_name="test")
 
     # iterative imputer
+    X_train_ori = np.copy(X_train)
+    X_test_ori = np.copy(X_test)
     if iterative_imputer:
         # linear relationship between 1, 2, 3
         imp = IterativeImputer(max_iter=100, random_state=0)
@@ -83,21 +85,28 @@ def data_loading():
         
         # linear relationship between 5 and 7
         imp = IterativeImputer(max_iter=100, random_state=0)
-        columns = np.concatenate((np.expand_dims(X_train[:,5], axis=1), np.expand_dims(X_train[:,7], axis=1)), axis=1)
+        columns = np.concatenate((np.expand_dims(X_train[:,3], axis=1),
+                                  np.expand_dims(X_train[:,5], axis=1), 
+                                  np.expand_dims(X_train[:,7], axis=1)), axis=1)
         imp = imp.fit(columns)
         res = imp.transform(columns)
-        X_train[:,5] = res[:,0]
-        X_train[:,7] = res[:,1]
-        columns_test = np.concatenate((np.expand_dims(X_test[:,5], axis=1), np.expand_dims(X_test[:,7], axis=1)), axis=1)
+        X_train[:,5] = res[:,1]
+        X_train[:,7] = res[:,2]
+        columns_test = np.concatenate((np.expand_dims(X_test[:,3], axis=1), 
+                                       np.expand_dims(X_test[:,5], axis=1), 
+                                       np.expand_dims(X_test[:,7], axis=1)), axis=1)
         res = imp.transform(columns_test)
-        X_test[:,5] = res[:,0]
-        X_test[:,7] = res[:,1]
+        X_test[:,5] = res[:,1]
+        X_test[:,7] = res[:,2]
 
         # linear relationship between 8, 9
         imp = IterativeImputer(max_iter=100, random_state=0)
         imp = imp.fit(X_train[:,8:10])
         X_train[:,8:10] = imp.transform(X_train[:,8:10])
         X_test[:,8:10] = imp.transform(X_test[:,8:10])
+        # imp = imp.fit(X_train_ori[:,7:10])
+        # X_train[:,8:10] = imp.transform(X_train_ori[:,7:10])[:,1:]
+        # X_test[:,8:10] = imp.transform(X_test_ori[:,7:10])[:,1:]
 
         # column 4, 6 hard to impute
         train_mean = train_df_ori.drop(['season'],axis=1).mean().to_numpy()
