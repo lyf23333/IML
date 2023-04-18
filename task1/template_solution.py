@@ -10,7 +10,7 @@ from sklearn.metrics import r2_score
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from sklearn.experimental import enable_iterative_imputer
-from sklearn.impute import IterativeImputer
+from sklearn.impute import IterativeImputer, KNNImputer
 import time
 
 def data_loading():
@@ -77,45 +77,59 @@ def data_loading():
     X_train_ori = np.copy(X_train)
     X_test_ori = np.copy(X_test)
     if iterative_imputer:
-        # linear relationship between 1, 2, 3
-        imp = IterativeImputer(max_iter=100, random_state=0)
-        imp = imp.fit(X_train[:,1:4])
-        X_train[:,1:4] = imp.transform(X_train[:,1:4])
-        X_test[:,1:4] = imp.transform(X_test[:,1:4])
+        imputer = KNNImputer(n_neighbors=5, weights="uniform")
+        X_train = imputer.fit_transform(X_train)
+        X_test = imputer.fit_transform(X_test)
+
+        # nearest_num = 5
+        # for i in range(X_train.shape[0]):
+        #     data_available_poses = ~np.isnan(X_train[i])
+        #     data_not_available_poses = np.isnan(X_train[i])
+        #     data_available_rows = np.all(~np.isnan(X_train[:,data_available_poses]), axis=1)
+        #     for j in data_not_available_poses.nonzero()[0]:
+        #         all_data_available_rows = data_available_rows * ~np.isnan(X_train[:,j])
+        #         data = X_train[:,data_available_poses][all_data_available_rows]
+        #         labels = X_train[:,j][all_data_available_rows]
         
-        # linear relationship between 5 and 7
-        imp = IterativeImputer(max_iter=100, random_state=0)
-        columns = np.concatenate((np.expand_dims(X_train[:,3], axis=1),
-                                  np.expand_dims(X_train[:,5], axis=1), 
-                                  np.expand_dims(X_train[:,7], axis=1)), axis=1)
-        imp = imp.fit(columns)
-        res = imp.transform(columns)
-        X_train[:,5] = res[:,1]
-        X_train[:,7] = res[:,2]
-        columns_test = np.concatenate((np.expand_dims(X_test[:,3], axis=1), 
-                                       np.expand_dims(X_test[:,5], axis=1), 
-                                       np.expand_dims(X_test[:,7], axis=1)), axis=1)
-        res = imp.transform(columns_test)
-        X_test[:,5] = res[:,1]
-        X_test[:,7] = res[:,2]
+        # # linear relationship between 1, 2, 3
+        # imp = IterativeImputer(max_iter=100, random_state=0)
+        # imp = imp.fit(X_train[:,1:4])
+        # X_train[:,1:4] = imp.transform(X_train[:,1:4])
+        # X_test[:,1:4] = imp.transform(X_test[:,1:4])
+        
+        # # linear relationship between 5 and 7
+        # imp = IterativeImputer(max_iter=100, random_state=0)
+        # columns = np.concatenate((np.expand_dims(X_train[:,3], axis=1),
+        #                           np.expand_dims(X_train[:,5], axis=1), 
+        #                           np.expand_dims(X_train[:,7], axis=1)), axis=1)
+        # imp = imp.fit(columns)
+        # res = imp.transform(columns)
+        # X_train[:,5] = res[:,1]
+        # X_train[:,7] = res[:,2]
+        # columns_test = np.concatenate((np.expand_dims(X_test[:,3], axis=1), 
+        #                                np.expand_dims(X_test[:,5], axis=1), 
+        #                                np.expand_dims(X_test[:,7], axis=1)), axis=1)
+        # res = imp.transform(columns_test)
+        # X_test[:,5] = res[:,1]
+        # X_test[:,7] = res[:,2]
 
-        # linear relationship between 8, 9
-        imp = IterativeImputer(max_iter=100, random_state=0)
-        imp = imp.fit(X_train[:,8:10])
-        X_train[:,8:10] = imp.transform(X_train[:,8:10])
-        X_test[:,8:10] = imp.transform(X_test[:,8:10])
-        # imp = imp.fit(X_train_ori[:,7:10])
-        # X_train[:,8:10] = imp.transform(X_train_ori[:,7:10])[:,1:]
-        # X_test[:,8:10] = imp.transform(X_test_ori[:,7:10])[:,1:]
+        # # linear relationship between 8, 9
+        # imp = IterativeImputer(max_iter=100, random_state=0)
+        # imp = imp.fit(X_train[:,8:10])
+        # X_train[:,8:10] = imp.transform(X_train[:,8:10])
+        # X_test[:,8:10] = imp.transform(X_test[:,8:10])
+        # # imp = imp.fit(X_train_ori[:,7:10])
+        # # X_train[:,8:10] = imp.transform(X_train_ori[:,7:10])[:,1:]
+        # # X_test[:,8:10] = imp.transform(X_test_ori[:,7:10])[:,1:]
 
-        # column 4, 6 hard to impute
-        train_mean = train_df_ori.drop(['season'],axis=1).mean().to_numpy()
-        X_train[:,4] = np.where(np.isnan(X_train[:,4]), train_mean[4], X_train[:,4])
-        X_train[:,6] = np.where(np.isnan(X_train[:,6]), train_mean[6], X_train[:,6])
+        # # column 4, 6 hard to impute
+        # train_mean = train_df_ori.drop(['season'],axis=1).mean().to_numpy()
+        # X_train[:,4] = np.where(np.isnan(X_train[:,4]), train_mean[4], X_train[:,4])
+        # X_train[:,6] = np.where(np.isnan(X_train[:,6]), train_mean[6], X_train[:,6])
 
-        test_mean = test_df_ori.drop(['season'],axis=1).mean().to_numpy()
-        X_test[:,4] = np.where(np.isnan(X_test[:,4]), test_mean[4], X_test[:,4])
-        X_test[:,6] = np.where(np.isnan(X_test[:,6]), test_mean[6], X_test[:,6])
+        # test_mean = test_df_ori.drop(['season'],axis=1).mean().to_numpy()
+        # X_test[:,4] = np.where(np.isnan(X_test[:,4]), test_mean[4], X_test[:,4])
+        # X_test[:,6] = np.where(np.isnan(X_test[:,6]), test_mean[6], X_test[:,6])
 
     # normalize data
     min_max_scaler_train = MinMaxScaler()
@@ -156,8 +170,8 @@ def data_loading():
             X_test_expand = np.concatenate((X_test_expand, X), axis=0)
         X_test_scaled = X_test_expand
 
-    # plot_data(X_train, save_name="train_processed")
-    # plot_data(X_test, save_name="test_processed")
+    plot_data(X_train, save_name="train_processed")
+    plot_data(X_test, save_name="test_processed")
 
     # assert (X_train.shape[1] == X_test.shape[1]) and (X_train.shape[0] == y_train.shape[0]) and (X_test.shape[0] == 100), "Invalid data shape"
     return X_train_scaled_labeled, y_train_labeled, X_train_scaled_unlabeled, X_test_scaled
@@ -271,8 +285,8 @@ def modeling_and_prediction(X_train, y_train, X_test):
         end_time = time.time()
         print(f"{j}th round took {end_time - start_time}s")
         print(f"r2 score for round {j}: {score_mat[j]}")
-        if j ==0:
-            break
+        # if j ==0:
+        #     break
 
     print("score matri: ", score_mat)
     print("average score: ", np.mean(score_mat))
