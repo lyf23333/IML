@@ -2,6 +2,7 @@
 # to first read the whole template and get a sense of the overall structure of the code before trying to fill in any of the TODO gaps
 # First, we import necessary libraries:
 import numpy as np
+import time
 from torchvision import transforms
 from torch.utils.data import DataLoader, TensorDataset
 import os
@@ -11,6 +12,7 @@ import torchvision.datasets as datasets
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
 
 from torchvision.models import resnet50
 
@@ -149,7 +151,7 @@ class Net(nn.Module):
         # x = torch.sigmoid(x)
         return x
 
-def train_model(loader):
+def train_model(loader, final_train=False):
     """
     The training procedure of the model; it accepts the training data, defines the model 
     and then trains it.
@@ -163,39 +165,81 @@ def train_model(loader):
     model.to(device)
     n_epochs = 10
 
-    # train_size = int(0.8 * len(loader))
-    # test_size = len(loader) - train_size
+    if final_train:
+        train_loader = loader
+    else:
+        dataset = loader.dataset
+        train_size = int(0.8 * len(dataset))
+        test_size = len(dataset) - train_size
+        
+        # split all_loader into train_loader and test_loader
+        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
+        train_loader = DataLoader(dataset=train_dataset,
+                        batch_size=loader.batch_size,
+                        shuffle=True,
+                        pin_memory=True, num_workers=loader.num_workers)
+        val_loader = DataLoader(dataset=val_dataset,
+                        batch_size=loader.batch_size,
+                        shuffle=True,
+                        pin_memory=True, num_workers=loader.num_workers)
     
-    # # split all_loader into train_loader and test_loader
-    # train_loader, test_loader = torch.utils.data.random_split(loader, [train_size, test_size])
-    
+    writer = TensorboardSummaryWriter(log_dir="task3", flush_secs=10)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
     criterion = nn.TripletMarginLoss(margin=1)
+    start = time.time()
     # Update the model using optimizer and criterion 
     for epoch in range(n_epochs):
-        # Set the model to training mode
+        loss_train, epi_train = run_model(model, train_loader, criterion, optimizer, train=True)
+        if not final_train:
+            loss_val, epi_val = run_model(model, val_loader, criterion, optimizer, train=False)
+
+        # tensorboard write
+        writer.add_scalar("Loss/train", loss_train/epi_train, epoch)
+        if not final_train:
+            writer.add_scalar("Loss/val", loss_val/epi_val, epoch)
+        end = time.time()
+        print("")
+        print(f"-------------Epoch {epoch}, spent {end-start}s----------------")
+        print(f"Training Loss: {loss_train/epi_train}")
+        if not final_train:
+            print(f"Validation Loss: {loss_val/epi_val}")
+        print("")
+
+    return model
+
+def run_model(model, loader, criterion, optimizer=None, train=True):
+    """
+    run model in each epoch
+    """
+    # Set the model to training mode
+    if train:
         model.train()
-        # Train one epoch
-        for X_h, y in train_loader:
-            x1 = X_h[:,:2048]
-            x2 = X_h[:,2048:4096]
-            x3 = X_h[:,4096:]
+    # Train one epoch
+    loss_epoch = 0
+    epi = 0
+    for X_h, y in loader:
+        x1 = X_h[:,:2048]
+        x2 = X_h[:,2048:4096]
+        x3 = X_h[:,4096:]
 
-            x1, x2, x3 = x1.to(device), x2.to(device), x3.to(device)
-            # Zero the gradients
-            optimizer.zero_grad()
-            # Forward pass
-            x1_embed = model(x1)
-            x2_embed = model(x2)
-            x3_embed = model(x3)
-            # Compute the loss
-            loss = criterion(x1_embed, x2_embed, x3_embed)
+        x1, x2, x3 = x1.to(device), x2.to(device), x3.to(device)
+        # Zero the gradients
+        optimizer.zero_grad()
+        # Forward pass
+        x1_embed = model(x1)
+        x2_embed = model(x2)
+        x3_embed = model(x3)
+        # Compute the loss
+        loss = criterion(x1_embed, x2_embed, x3_embed)
 
-            # Backward pass
+        # Backward pass
+        if train:
             loss.backward()
             optimizer.step()
 
-    return model
+        epi+=1
+        loss_epoch+=loss.item()
+    return loss_epoch, epi
 
 def test_model(model, loader):
     """
@@ -242,6 +286,7 @@ def test_model(model, loader):
 if __name__ == '__main__':
     TRAIN_TRIPLETS = 'task3/train_triplets.txt'
     TEST_TRIPLETS = 'task3/test_triplets.txt'
+    final_train = False
 
     # generate embedding for each image in the dataset
     if(os.path.exists('task3/dataset/embeddings.npy') == False):
@@ -256,7 +301,7 @@ if __name__ == '__main__':
     test_loader = create_loader_from_np(X_test, train = False, batch_size=2048, shuffle=False)
 
     # define a model and train it
-    model = train_model(train_loader)
+    model = train_model(train_loader, final_train=final_train)
     
     # test the model on the test data
     test_model(model, test_loader)
