@@ -13,8 +13,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter as TensorboardSummaryWriter
-
-from torchvision.models import resnet50
+from torch.optim.lr_scheduler import StepLR
+from torchvision.models import resnet50, resnet101, resnet152
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -39,7 +39,7 @@ def generate_embeddings():
 
     # TODO: define a model for extraction of the embeddings (Hint: load a pretrained model,
     #  more info here: https://pytorch.org/vision/stable/models.html)
-    model = resnet50(pretrained=True)
+    model = resnet152(pretrained=True)
 
     embeddings = []
     embedding_size = 2048
@@ -102,7 +102,7 @@ def get_data(file, train=True):
     return X, y
 
 # Hint: adjust batch_size and num_workers to your PC configuration, so that you don't run out of memory
-def create_loader_from_np(X, y = None, train = True, batch_size=64, shuffle=True, num_workers = 4):
+def create_loader_from_np(X, y = None, train = True, batch_size=64, shuffle=True, num_workers = 1):
     """
     Create a torch.utils.data.DataLoader object from numpy arrays containing the data.
 
@@ -119,7 +119,7 @@ def create_loader_from_np(X, y = None, train = True, batch_size=64, shuffle=True
     loader = DataLoader(dataset=dataset,
                         batch_size=batch_size,
                         shuffle=shuffle,
-                        pin_memory=True, num_workers=num_workers)
+                        num_workers=num_workers)
     return loader
 
 # TODO: define a model. Here, the basic structure is defined, but you need to fill in the details
@@ -127,28 +127,29 @@ class Net(nn.Module):
     """
     The model class, which defines our classifier.
     """
-    def __init__(self):
-        """
-        The constructor of the model.
-        """
-        super().__init__()
-        self.fc1 = nn.Linear(2048, 1000)
-        self.fc2 = nn.Linear(1000, 500)
-
+    EMBEDDING_DIM = 256
+    
+    def __init__(self, inp = 2048, hidden=1024, hidden_1=512, hidden_2=256, d=0.2):
+        super(Net, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(inp, hidden),
+            nn.PReLU(),
+            nn.BatchNorm1d(hidden),
+            nn.Dropout(d),
+            nn.Linear(hidden, hidden_1),
+            nn.PReLU(),
+            nn.BatchNorm1d(hidden_1),
+            nn.Dropout(d),
+            nn.Linear(hidden_1, hidden_2),
+            nn.PReLU(),
+            nn.BatchNorm1d(hidden_2),
+            nn.Dropout(d),
+            nn.Linear(hidden_2, Net.EMBEDDING_DIM)
+        )
+        
     def forward(self, x):
-        """
-        The forward pass of the model.
-
-        input: x: torch.Tensor, the input to the model
-
-        output: x: torch.Tensor, the output of the model
-        """
-        x = self.fc1(x)
-        x = F.relu(x)
-        x = self.fc2(x)
-        # x = F.relu(x)
-        # x = self.fc3(x)
-        # x = torch.sigmoid(x)
+        x = x.reshape(x.size(0), -1)
+        x = self.fc(x)
         return x
 
 def train_model(loader, final_train=False):
@@ -163,7 +164,7 @@ def train_model(loader, final_train=False):
     model = Net()
     model.train()
     model.to(device)
-    n_epochs = 10
+    n_epochs = 50
 
     if final_train:
         train_loader = loader
@@ -176,27 +177,34 @@ def train_model(loader, final_train=False):
         train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
         train_loader = DataLoader(dataset=train_dataset,
                         batch_size=loader.batch_size,
-                        shuffle=True,
-                        pin_memory=True, num_workers=loader.num_workers)
+                        shuffle=True)
         val_loader = DataLoader(dataset=val_dataset,
                         batch_size=loader.batch_size,
-                        shuffle=True,
-                        pin_memory=True, num_workers=loader.num_workers)
-    
-    writer = TensorboardSummaryWriter(log_dir="task3", flush_secs=10)
+                        shuffle=True)
+    count = 0
+    title = "log"
+    run_name = f"resnet152_{title}_{count}"
+    if os.path.exists(f"task3/logs/{run_name}"):
+        count += 1
+    run_name = f"resnet152_{title}_{count}"
+    writer = TensorboardSummaryWriter(log_dir=f"task3/logs/{run_name}", flush_secs=10)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
+    scheduler = StepLR(optimizer, step_size=10, gamma=0.5)
+
     criterion = nn.TripletMarginLoss(margin=1)
     start = time.time()
     # Update the model using optimizer and criterion 
     for epoch in range(n_epochs):
-        loss_train, epi_train = run_model(model, train_loader, criterion, optimizer, train=True)
+        loss_train, epi_train, _ = run_model(model, train_loader, criterion, optimizer, train=True)
         if not final_train:
-            loss_val, epi_val = run_model(model, val_loader, criterion, optimizer, train=False)
+            loss_val, epi_val, predictions = run_model(model, val_loader, criterion, optimizer, train=False)
+        scheduler.step()
 
         # tensorboard write
         writer.add_scalar("Loss/train", loss_train/epi_train, epoch)
         if not final_train:
             writer.add_scalar("Loss/val", loss_val/epi_val, epoch)
+            writer.add_scalar("Loss/val_accuracy", torch.sum(predictions)/predictions.shape[0], epoch)
         end = time.time()
         print("")
         print(f"-------------Epoch {epoch}, spent {end-start}s----------------")
@@ -216,8 +224,10 @@ def run_model(model, loader, criterion, optimizer=None, train=True):
         model.train()
     # Train one epoch
     loss_epoch = 0
+    prediction_results = torch.tensor([])
     epi = 0
     for X_h, y in loader:
+        predictions = []
         x1 = X_h[:,:2048]
         x2 = X_h[:,2048:4096]
         x3 = X_h[:,4096:]
@@ -230,7 +240,20 @@ def run_model(model, loader, criterion, optimizer=None, train=True):
         x2_embed = model(x2)
         x3_embed = model(x3)
         # Compute the loss
-        loss = criterion(x1_embed, x2_embed, x3_embed)
+        if train:
+            loss = criterion(x1_embed, x2_embed, x3_embed)
+        else:
+            loss = criterion(x1_embed, x2_embed, x3_embed)
+            for iii,_ in enumerate(x1_embed):
+                ab = torch.linalg.norm(x1_embed[iii] - x2_embed[iii])
+                bc = torch.linalg.norm(x1_embed[iii] - x3_embed[iii])
+
+                if ab > bc:
+                    predictions.append(0)
+                else:
+                    predictions.append(1)
+            error = torch.tensor(predictions).to(y.device) - y == 0
+            prediction_results = torch.cat((prediction_results, error))
 
         # Backward pass
         if train:
@@ -239,7 +262,7 @@ def run_model(model, loader, criterion, optimizer=None, train=True):
 
         epi+=1
         loss_epoch+=loss.item()
-    return loss_epoch, epi
+    return loss_epoch, epi, prediction_results
 
 def test_model(model, loader):
     """
