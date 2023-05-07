@@ -34,8 +34,7 @@ def generate_embeddings():
     # run out of memory
     train_loader = DataLoader(dataset=train_dataset,
                               batch_size=64,
-                              shuffle=False,
-                              pin_memory=True, num_workers=16)
+                              shuffle=False)
 
     # TODO: define a model for extraction of the embeddings (Hint: load a pretrained model,
     #  more info here: https://pytorch.org/vision/stable/models.html)
@@ -101,6 +100,20 @@ def get_data(file, train=True):
     y = np.hstack(y)
     return X, y
 
+def data_augmentation(file, pre_file):
+    triplets = []
+    with open(pre_file) as f:
+        for line in f:
+            triplets.append(line)
+
+    with open(file, "w") as f:
+        for line in triplets:
+            f.write(line)
+            first_num = line[:5]
+            second_num = line[6:11]
+            new_line = second_num + " " + first_num + line[11:]
+            f.write(new_line)
+
 # Hint: adjust batch_size and num_workers to your PC configuration, so that you don't run out of memory
 def create_loader_from_np(X, y = None, train = True, batch_size=64, shuffle=True, num_workers = 1):
     """
@@ -118,8 +131,7 @@ def create_loader_from_np(X, y = None, train = True, batch_size=64, shuffle=True
         dataset = TensorDataset(torch.from_numpy(X).type(torch.float))
     loader = DataLoader(dataset=dataset,
                         batch_size=batch_size,
-                        shuffle=shuffle,
-                        num_workers=num_workers)
+                        shuffle=shuffle)
     return loader
 
 # TODO: define a model. Here, the basic structure is defined, but you need to fill in the details
@@ -129,7 +141,7 @@ class Net(nn.Module):
     """
     EMBEDDING_DIM = 256
     
-    def __init__(self, inp = 2048, hidden=1024, hidden_1=512, hidden_2=256, d=0.2):
+    def __init__(self, inp = 2048, hidden=1024, hidden_1=512, hidden_2=256, d=0.3):
         super(Net, self).__init__()
         self.fc = nn.Sequential(
             nn.Linear(inp, hidden),
@@ -164,7 +176,8 @@ def train_model(loader, final_train=False):
     model = Net()
     model.train()
     model.to(device)
-    n_epochs = 50
+    n_epochs = 10
+    title = "data_augmentaion"
 
     if final_train:
         train_loader = loader
@@ -182,7 +195,6 @@ def train_model(loader, final_train=False):
                         batch_size=loader.batch_size,
                         shuffle=True)
     count = 0
-    title = "log"
     run_name = f"resnet152_{title}_{count}"
     if os.path.exists(f"task3/logs/{run_name}"):
         count += 1
@@ -308,6 +320,7 @@ def test_model(model, loader):
 # Main function. You don't have to change this
 if __name__ == '__main__':
     TRAIN_TRIPLETS = 'task3/train_triplets.txt'
+    TRAIN_TRIPLETS_AUG = 'task3/train_triplets_aug.txt'
     TEST_TRIPLETS = 'task3/test_triplets.txt'
     final_train = False
 
@@ -316,6 +329,7 @@ if __name__ == '__main__':
         generate_embeddings()
 
     # load the training and testing data
+    # data_augmentation(TRAIN_TRIPLETS_AUG, TRAIN_TRIPLETS)
     X, y = get_data(TRAIN_TRIPLETS)
     X_test, _ = get_data(TEST_TRIPLETS, train=False)
 
