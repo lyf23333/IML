@@ -17,6 +17,8 @@ from torch.optim.lr_scheduler import StepLR
 from torchvision.models import resnet50, resnet101, resnet152
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+MARGIN = 5
+MARGIN_SEMI = 10
 
 def generate_embeddings():
     """
@@ -34,7 +36,8 @@ def generate_embeddings():
     # run out of memory
     train_loader = DataLoader(dataset=train_dataset,
                               batch_size=64,
-                              shuffle=False)
+                              shuffle=False,
+                              pin_memory=True, num_workers=16)
 
     # TODO: define a model for extraction of the embeddings (Hint: load a pretrained model,
     #  more info here: https://pytorch.org/vision/stable/models.html)
@@ -93,26 +96,12 @@ def get_data(file, train=True):
         X.append(np.hstack([emb[0].reshape(-1), emb[1].reshape(-1), emb[2].reshape(-1)]))
         y.append(1)
         # Generating negative samples (data augmentation)
-    #     if train:
-    #         X.append(np.hstack([emb[0].reshape(-1), emb[2].reshape(-1), emb[1].reshape(-1)]))
-    #         y.append(0)
+        # if train:
+        #     X.append(np.hstack([emb[0].reshape(-1), emb[2].reshape(-1), emb[1].reshape(-1)]))
+        #     y.append(0)
     X = np.vstack(X)
     y = np.hstack(y)
     return X, y
-
-def data_augmentation(file, pre_file):
-    triplets = []
-    with open(pre_file) as f:
-        for line in f:
-            triplets.append(line)
-
-    with open(file, "w") as f:
-        for line in triplets:
-            f.write(line)
-            first_num = line[:5]
-            second_num = line[6:11]
-            new_line = second_num + " " + first_num + line[11:]
-            f.write(new_line)
 
 # Hint: adjust batch_size and num_workers to your PC configuration, so that you don't run out of memory
 def create_loader_from_np(X, y = None, train = True, batch_size=64, shuffle=True, num_workers = 1):
@@ -131,7 +120,8 @@ def create_loader_from_np(X, y = None, train = True, batch_size=64, shuffle=True
         dataset = TensorDataset(torch.from_numpy(X).type(torch.float))
     loader = DataLoader(dataset=dataset,
                         batch_size=batch_size,
-                        shuffle=shuffle)
+                        shuffle=shuffle,
+                        num_workers=num_workers)
     return loader
 
 # TODO: define a model. Here, the basic structure is defined, but you need to fill in the details
@@ -139,9 +129,9 @@ class Net(nn.Module):
     """
     The model class, which defines our classifier.
     """
-    EMBEDDING_DIM = 256
+    EMBEDDING_DIM = 128
     
-    def __init__(self, inp = 2048, hidden=1024, hidden_1=512, hidden_2=256, d=0.3):
+    def __init__(self, inp = 2048, hidden=1024, hidden_1=512, hidden_2=256, hidden_3=128, d=0.3):
         super(Net, self).__init__()
         self.fc = nn.Sequential(
             nn.Linear(inp, hidden),
@@ -164,7 +154,7 @@ class Net(nn.Module):
         x = self.fc(x)
         return x
 
-def train_model(loader, final_train=False):
+def train_model(train_loader, val_loader, final_train=False):
     """
     The training procedure of the model; it accepts the training data, defines the model 
     and then trains it.
@@ -177,23 +167,8 @@ def train_model(loader, final_train=False):
     model.train()
     model.to(device)
     n_epochs = 10
-    title = "data_augmentaion"
+    title = "select_semihard_margin20"
 
-    if final_train:
-        train_loader = loader
-    else:
-        dataset = loader.dataset
-        train_size = int(0.8 * len(dataset))
-        test_size = len(dataset) - train_size
-        
-        # split all_loader into train_loader and test_loader
-        train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
-        train_loader = DataLoader(dataset=train_dataset,
-                        batch_size=loader.batch_size,
-                        shuffle=True)
-        val_loader = DataLoader(dataset=val_dataset,
-                        batch_size=loader.batch_size,
-                        shuffle=True)
     count = 0
     run_name = f"resnet152_{title}_{count}"
     if os.path.exists(f"task3/logs/{run_name}"):
@@ -201,33 +176,53 @@ def train_model(loader, final_train=False):
     run_name = f"resnet152_{title}_{count}"
     writer = TensorboardSummaryWriter(log_dir=f"task3/logs/{run_name}", flush_secs=10)
     optimizer = optim.Adam(model.parameters(), lr=0.001)
-    scheduler = StepLR(optimizer, step_size=10, gamma=0.5)
+    scheduler = StepLR(optimizer, step_size=30, gamma=0.5)
 
-    criterion = nn.TripletMarginLoss(margin=1)
+    criterion = nn.TripletMarginLoss(margin=MARGIN)
+    criterion_semi = nn.TripletMarginLoss(margin=MARGIN_SEMI)
     start = time.time()
     # Update the model using optimizer and criterion 
     for epoch in range(n_epochs):
-        loss_train, epi_train, _ = run_model(model, train_loader, criterion, optimizer, train=True)
+
+        loss_train, epi_train, predictions_train = run_model(model, train_loader, criterion, criterion_semi, optimizer, train=True)
         if not final_train:
-            loss_val, epi_val, predictions = run_model(model, val_loader, criterion, optimizer, train=False)
+            loss_val, epi_val, predictions_val = run_model(model, val_loader, criterion, criterion_semi, optimizer, train=False)
         scheduler.step()
 
         # tensorboard write
         writer.add_scalar("Loss/train", loss_train/epi_train, epoch)
         if not final_train:
             writer.add_scalar("Loss/val", loss_val/epi_val, epoch)
-            writer.add_scalar("Loss/val_accuracy", torch.sum(predictions)/predictions.shape[0], epoch)
+            writer.add_scalar("Loss/val_accuracy", torch.sum(predictions_val)/predictions_val.shape[0], epoch)
         end = time.time()
         print("")
         print(f"-------------Epoch {epoch}, spent {end-start}s----------------")
         print(f"Training Loss: {loss_train/epi_train}")
         if not final_train:
             print(f"Validation Loss: {loss_val/epi_val}")
+            print(f"Validation Accuracy: {torch.sum(predictions_val)/predictions_val.shape[0]}")
+            print(f"Train Accuracy: {torch.sum(predictions_train) / predictions_train.shape[0]}")
         print("")
 
     return model
 
-def run_model(model, loader, criterion, optimizer=None, train=True):
+def select_triplet(x1_embed, x2_embed, x3_embed, y):
+    select_indices = []
+    for iii,_ in enumerate(x1_embed):
+        ab = torch.linalg.norm(x1_embed[iii] - x2_embed[iii])
+        ac = torch.linalg.norm(x1_embed[iii] - x3_embed[iii])
+
+        # if ac <= ab + MARGIN: # choose hard triplets and semi-hard triplets
+        if (ab <= ac) and (ac < ab + MARGIN_SEMI):   # choose semi-hard triplets
+            select_indices.append(iii)
+    select_indices = torch.tensor(select_indices).to(device)
+    if select_indices.size(0) > 0:
+        return torch.index_select(x1_embed, 0, select_indices), torch.index_select(x2_embed, 0, select_indices), torch.index_select(x3_embed, 0, select_indices), torch.index_select(y, 0, select_indices)
+    else:
+        return x1_embed, x2_embed, x3_embed, y
+
+
+def run_model(model, loader, criterion, criterion_semi, optimizer=None, train=True):
     """
     run model in each epoch
     """
@@ -238,6 +233,8 @@ def run_model(model, loader, criterion, optimizer=None, train=True):
     loss_epoch = 0
     prediction_results = torch.tensor([])
     epi = 0
+    # debug: record semi-hard nums
+    semi_total = 0
     for X_h, y in loader:
         predictions = []
         x1 = X_h[:,:2048]
@@ -245,6 +242,7 @@ def run_model(model, loader, criterion, optimizer=None, train=True):
         x3 = X_h[:,4096:]
 
         x1, x2, x3 = x1.to(device), x2.to(device), x3.to(device)
+
         # Zero the gradients
         optimizer.zero_grad()
         # Forward pass
@@ -253,19 +251,31 @@ def run_model(model, loader, criterion, optimizer=None, train=True):
         x3_embed = model(x3)
         # Compute the loss
         if train:
-            loss = criterion(x1_embed, x2_embed, x3_embed)
+            x1_embed_semi, x2_embed_semi, x3_embed_semi, y_semi = select_triplet(x1_embed, x2_embed, x3_embed, y.to(device))
+            if (x1_embed_semi.size(0) > 0):
+                loss = criterion(x1_embed, x2_embed, x3_embed) # + criterion_semi(x1_embed_semi, x2_embed_semi, x3_embed_semi)
+            else:
+                loss = criterion(x1_embed, x2_embed, x3_embed)
+
         else:
             loss = criterion(x1_embed, x2_embed, x3_embed)
-            for iii,_ in enumerate(x1_embed):
-                ab = torch.linalg.norm(x1_embed[iii] - x2_embed[iii])
-                bc = torch.linalg.norm(x1_embed[iii] - x3_embed[iii])
 
-                if ab > bc:
-                    predictions.append(0)
-                else:
-                    predictions.append(1)
-            error = torch.tensor(predictions).to(y.device) - y == 0
-            prediction_results = torch.cat((prediction_results, error))
+        for iii,_ in enumerate(x1_embed):
+            ab = torch.linalg.norm(x1_embed[iii] - x2_embed[iii])
+            ac = torch.linalg.norm(x1_embed[iii] - x3_embed[iii])
+
+            if ab > ac:
+                predictions.append(0)
+            else:
+                predictions.append(1)
+
+            # debug: record semi-hard nums
+            if (ab <= ac) and (ac < ab + MARGIN_SEMI):
+                semi_total += 1
+
+        error = torch.tensor(predictions).to(y.device) - y == 0
+        prediction_results = torch.cat((prediction_results, error))
+
 
         # Backward pass
         if train:
@@ -274,6 +284,13 @@ def run_model(model, loader, criterion, optimizer=None, train=True):
 
         epi+=1
         loss_epoch+=loss.item()
+    
+    # debug: record semi-hard nums
+    if train:
+        print("semi total in train set: ", semi_total / len(loader.dataset))
+    else:
+        print("semi total in validation set: ", semi_total / len(loader.dataset))
+
     return loss_epoch, epi, prediction_results
 
 def test_model(model, loader):
@@ -302,13 +319,13 @@ def test_model(model, loader):
             predicted_3 = model(x_b3)
             
             for iii,_ in enumerate(predicted_1):
-              ab = torch.linalg.norm(predicted_1[iii] - predicted_2[iii])
-              bc = torch.linalg.norm(predicted_1[iii] - predicted_3[iii])
+                ab = torch.linalg.norm(predicted_1[iii] - predicted_2[iii])
+                ac = torch.linalg.norm(predicted_1[iii] - predicted_3[iii])
 
-              if ab > bc:
-                 predictions.append(0)
-              else:
-                 predictions.append(1)
+                if (ab > ac):
+                    predictions.append(0)
+                else:
+                    predictions.append(1)
             # Rounding the predictions to 0 or 1
             # predicted[predicted >= 0.5] = 1
             # predicted[predicted < 0.5] = 0
@@ -316,30 +333,61 @@ def test_model(model, loader):
         predictions = np.vstack(predictions)
     np.savetxt("task3/results.txt", predictions, fmt='%i')
 
+def split_dataset(dataset_file:str, val_size = 300):
+    triplets = np.loadtxt(dataset_file)
+    triplets_mask = triplets.copy()
+    triplets_val = []
+    triplets_train = []
+    for i in range(triplets.shape[0]):
+        if np.any(np.isnan(triplets_mask[i])):
+            continue
+        triplets_val.append(triplets[i])
+        triplets_mask[np.where(triplets == triplets[i][0])] = np.NaN
+        triplets_mask[np.where(triplets == triplets[i][1])] = np.NaN
+        triplets_mask[np.where(triplets == triplets[i][2])] = np.NaN
+        if len(triplets_val) > val_size:
+            break
+    for i in range(triplets.shape[0]):
+        if not np.any(np.isnan(triplets_mask[i])):
+            triplets_train.append(triplets[i])
+    print(len(triplets_train), len(triplets_val))
+    np.savetxt("./task3/validation_triplets_split.txt", np.array(triplets_val, dtype=int), fmt='%05d', delimiter=" ")
+    np.savetxt("./task3/train_triplets_split.txt", np.array(triplets_train, dtype=int), fmt='%05d', delimiter=" ")
+
+        
+    
+
 
 # Main function. You don't have to change this
 if __name__ == '__main__':
-    TRAIN_TRIPLETS = 'task3/train_triplets.txt'
-    TRAIN_TRIPLETS_AUG = 'task3/train_triplets_aug.txt'
+    # TRAIN_TRIPLETS = 'task3/train_triplets.txt'
+    TRAIN_TRIPLETS = 'task3/train_triplets_split.txt'
+    VAL_TRIPLETS = 'task3/validation_triplets_split.txt'
     TEST_TRIPLETS = 'task3/test_triplets.txt'
     final_train = False
 
     # generate embedding for each image in the dataset
     if(os.path.exists('task3/dataset/embeddings.npy') == False):
         generate_embeddings()
-
+    print("find embeddings")
     # load the training and testing data
-    # data_augmentation(TRAIN_TRIPLETS_AUG, TRAIN_TRIPLETS)
-    X, y = get_data(TRAIN_TRIPLETS)
+
+    X_train, y_train = get_data(TRAIN_TRIPLETS)
+    X_val, y_val = get_data(VAL_TRIPLETS)
     X_test, _ = get_data(TEST_TRIPLETS, train=False)
-
     # Create data loaders for the training and testing data
-    train_loader = create_loader_from_np(X, y, train = True, batch_size=64)
-    test_loader = create_loader_from_np(X_test, train = False, batch_size=2048, shuffle=False)
-
+    train_loader = create_loader_from_np(X_train, y_train, train=True, batch_size=64)
+    val_loader = create_loader_from_np(X_val, y_val, train=True, batch_size=64)
+    test_loader = create_loader_from_np(X_test, train=False, batch_size=2048, shuffle=False)
     # define a model and train it
-    model = train_model(train_loader, final_train=final_train)
-    
+    model = train_model(train_loader, val_loader, final_train=final_train)
+
     # test the model on the test data
     test_model(model, test_loader)
     print("Results saved to results.txt")
+
+# if __name__ == '__main__':
+#     TRAIN_TRIPLETS = 'task3/train_triplets.txt'
+#     TEST_TRIPLETS = 'task3/test_triplets.txt'
+#
+#     split_dataset(TRAIN_TRIPLETS)
