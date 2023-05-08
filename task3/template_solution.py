@@ -17,7 +17,7 @@ from torch.optim.lr_scheduler import StepLR
 from torchvision.models import resnet50, resnet101, resnet152
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-MARGIN = 5
+MARGIN = 1
 MARGIN_SEMI = 10
 
 def generate_embeddings():
@@ -41,7 +41,8 @@ def generate_embeddings():
 
     # TODO: define a model for extraction of the embeddings (Hint: load a pretrained model,
     #  more info here: https://pytorch.org/vision/stable/models.html)
-    model = resnet152(pretrained=True)
+    # model = resnet50(pretrained=True)
+    model = resnet101(pretrained=True)
 
     embeddings = []
     embedding_size = 2048
@@ -60,10 +61,10 @@ def generate_embeddings():
             features = model(images)
             embeddings[i * train_loader.batch_size: (i + 1) * train_loader.batch_size] = features.cpu().numpy()
 
-    np.save('task3/dataset/embeddings.npy', embeddings)
+    np.save('task3/dataset/embeddings_resnet101.npy', embeddings)
 
 
-def get_data(file, train=True):
+def get_data(file, embedding_file, train=True):
     """
     Load the triplets from the file and generate the features and labels.
 
@@ -82,7 +83,7 @@ def get_data(file, train=True):
     train_dataset = datasets.ImageFolder(root="task3/dataset/",
                                          transform=None)
     filenames = [s[0].split('/')[-1].replace('.jpg', '') for s in train_dataset.samples]
-    embeddings = np.load('task3/dataset/embeddings.npy')
+    embeddings = np.load(embedding_file)
     # TODO: Normalize the embeddings across the dataset
     embeddings = (embeddings - embeddings.mean(axis=0)) / embeddings.std(axis=0)
     file_to_embedding = {}
@@ -131,23 +132,28 @@ class Net(nn.Module):
     """
     EMBEDDING_DIM = 128
     
-    def __init__(self, inp = 2048, hidden=1024, hidden_1=512, hidden_2=256, hidden_3=128, d=0.3):
+    def __init__(self, inp = 2048, hidden=1024, hidden_1=512, hidden_2=256, hidden_3=128, d=0.5):
         super(Net, self).__init__()
         self.fc = nn.Sequential(
             nn.Linear(inp, hidden),
             nn.PReLU(),
-            nn.BatchNorm1d(hidden),
+            # nn.BatchNorm1d(hidden),
             nn.Dropout(d),
-            nn.Linear(hidden, hidden_1),
+            nn.Linear(hidden, 4096),
             nn.PReLU(),
-            nn.BatchNorm1d(hidden_1),
+            # nn.BatchNorm1d(4096),
+            nn.Dropout(d),
+            nn.Linear(4096, hidden_1),
+            nn.PReLU(),
+            # nn.BatchNorm1d(hidden_1),
             nn.Dropout(d),
             nn.Linear(hidden_1, hidden_2),
             nn.PReLU(),
-            nn.BatchNorm1d(hidden_2),
+            # nn.BatchNorm1d(hidden_2),
             nn.Dropout(d),
             nn.Linear(hidden_2, Net.EMBEDDING_DIM)
         )
+
         
     def forward(self, x):
         x = x.reshape(x.size(0), -1)
@@ -166,16 +172,16 @@ def train_model(train_loader, val_loader, final_train=False):
     model = Net()
     model.train()
     model.to(device)
-    n_epochs = 10
+    n_epochs = 30
     title = "select_semihard_margin20"
 
     count = 0
-    run_name = f"resnet152_{title}_{count}"
+    run_name = f"resnet_{title}_{count}"
     if os.path.exists(f"task3/logs/{run_name}"):
         count += 1
-    run_name = f"resnet152_{title}_{count}"
+    run_name = f"resnet_{title}_{count}"
     writer = TensorboardSummaryWriter(log_dir=f"task3/logs/{run_name}", flush_secs=10)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0002)
     scheduler = StepLR(optimizer, step_size=30, gamma=0.5)
 
     criterion = nn.TripletMarginLoss(margin=MARGIN)
@@ -213,7 +219,7 @@ def select_triplet(x1_embed, x2_embed, x3_embed, y):
         ac = torch.linalg.norm(x1_embed[iii] - x3_embed[iii])
 
         # if ac <= ab + MARGIN: # choose hard triplets and semi-hard triplets
-        if (ab <= ac) and (ac < ab + MARGIN_SEMI):   # choose semi-hard triplets
+        if (ab <= ac) and (ac < ab + MARGIN):   # choose semi-hard triplets
             select_indices.append(iii)
     select_indices = torch.tensor(select_indices).to(device)
     if select_indices.size(0) > 0:
@@ -253,7 +259,7 @@ def run_model(model, loader, criterion, criterion_semi, optimizer=None, train=Tr
         if train:
             x1_embed_semi, x2_embed_semi, x3_embed_semi, y_semi = select_triplet(x1_embed, x2_embed, x3_embed, y.to(device))
             if (x1_embed_semi.size(0) > 0):
-                loss = criterion(x1_embed, x2_embed, x3_embed) # + criterion_semi(x1_embed_semi, x2_embed_semi, x3_embed_semi)
+                loss = criterion(x1_embed, x2_embed, x3_embed) #+ criterion_semi(x1_embed_semi, x2_embed_semi, x3_embed_semi)
             else:
                 loss = criterion(x1_embed, x2_embed, x3_embed)
 
@@ -270,7 +276,7 @@ def run_model(model, loader, criterion, criterion_semi, optimizer=None, train=Tr
                 predictions.append(1)
 
             # debug: record semi-hard nums
-            if (ab <= ac) and (ac < ab + MARGIN_SEMI):
+            if (ab <= ac) and (ac < ab + MARGIN):
                 semi_total += 1
 
         error = torch.tensor(predictions).to(y.device) - y == 0
@@ -293,7 +299,7 @@ def run_model(model, loader, criterion, criterion_semi, optimizer=None, train=Tr
 
     return loss_epoch, epi, prediction_results
 
-def test_model(model, loader):
+def test_model(model, loader, save_file):
     """
     The testing procedure of the model; it accepts the testing data and the trained model and 
     then tests the model on it.
@@ -331,7 +337,7 @@ def test_model(model, loader):
             # predicted[predicted < 0.5] = 0
             # predictions.append(predicted)
         predictions = np.vstack(predictions)
-    np.savetxt("task3/results.txt", predictions, fmt='%i')
+    np.savetxt(save_file, predictions, fmt='%i')
 
 def split_dataset(dataset_file:str, val_size = 300):
     triplets = np.loadtxt(dataset_file)
@@ -354,40 +360,60 @@ def split_dataset(dataset_file:str, val_size = 300):
     np.savetxt("./task3/validation_triplets_split.txt", np.array(triplets_val, dtype=int), fmt='%05d', delimiter=" ")
     np.savetxt("./task3/train_triplets_split.txt", np.array(triplets_train, dtype=int), fmt='%05d', delimiter=" ")
 
-        
+
+def voting(results_list: list):
+    predictions = np.zeros(59544)
+    for results in results_list:
+        predictions += np.loadtxt(results)
+    predictions_final = predictions.copy()
+    predictions_final[predictions > 1] = 1
+    predictions_final[predictions <= 1] = 0
+    print(np.count_nonzero(predictions_final) / predictions.shape[0])
+    np.savetxt('task3/results.txt', predictions_final.reshape([59544, 1]), fmt='%i')
+
+
     
-
-
 # Main function. You don't have to change this
 if __name__ == '__main__':
-    # TRAIN_TRIPLETS = 'task3/train_triplets.txt'
-    TRAIN_TRIPLETS = 'task3/train_triplets_split.txt'
-    VAL_TRIPLETS = 'task3/validation_triplets_split.txt'
-    TEST_TRIPLETS = 'task3/test_triplets.txt'
-    final_train = False
+    embedding_list = ['resnet50', 'resnet101', 'resnet152']
+    result_list = []
+    for embedding in embedding_list:
+        # TRAIN_TRIPLETS = 'task3/train_triplets.txt'
+        TRAIN_TRIPLETS = 'task3/train_triplets_split.txt'
+        VAL_TRIPLETS = 'task3/validation_triplets_split.txt'
+        TEST_TRIPLETS = 'task3/test_triplets.txt'
+        save_file = 'task3/results_' + embedding + '.txt'
+        embedding_file = 'task3/dataset/embeddings_' + embedding + '.npy'
+        result_list.append(save_file)
+        final_train = False
 
-    # generate embedding for each image in the dataset
-    if(os.path.exists('task3/dataset/embeddings.npy') == False):
-        generate_embeddings()
-    print("find embeddings")
-    # load the training and testing data
+        # generate embedding for each image in the dataset
+        # if(os.path.exists('task3/dataset/embeddings_resnet50.npy') == False):
+        # generate_embeddings()
+        # print("find embeddings")
 
-    X_train, y_train = get_data(TRAIN_TRIPLETS)
-    X_val, y_val = get_data(VAL_TRIPLETS)
-    X_test, _ = get_data(TEST_TRIPLETS, train=False)
-    # Create data loaders for the training and testing data
-    train_loader = create_loader_from_np(X_train, y_train, train=True, batch_size=64)
-    val_loader = create_loader_from_np(X_val, y_val, train=True, batch_size=64)
-    test_loader = create_loader_from_np(X_test, train=False, batch_size=2048, shuffle=False)
-    # define a model and train it
-    model = train_model(train_loader, val_loader, final_train=final_train)
+        # load the training and testing data
+        X_train, y_train = get_data(TRAIN_TRIPLETS, embedding_file)
+        X_val, y_val = get_data(VAL_TRIPLETS, embedding_file)
+        X_test, _ = get_data(TEST_TRIPLETS, embedding_file, train=False)
+        # Create data loaders for the training and testing data
+        train_loader = create_loader_from_np(X_train, y_train, train=True, batch_size=64)
+        val_loader = create_loader_from_np(X_val, y_val, train=True, batch_size=64)
+        test_loader = create_loader_from_np(X_test, train=False, batch_size=2048, shuffle=False)
+        # define a model and train it
+        model = train_model(train_loader, val_loader, final_train=final_train)
 
-    # test the model on the test data
-    test_model(model, test_loader)
-    print("Results saved to results.txt")
+        # test the model on the test data
+        test_model(model, test_loader, save_file)
+        print("Results saved to " + save_file)
+
+    voting(result_list)
+
+
 
 # if __name__ == '__main__':
 #     TRAIN_TRIPLETS = 'task3/train_triplets.txt'
 #     TEST_TRIPLETS = 'task3/test_triplets.txt'
 #
 #     split_dataset(TRAIN_TRIPLETS)
+
