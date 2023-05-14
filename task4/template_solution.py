@@ -150,7 +150,7 @@ def make_feature_extractor(x, y, batch_size=256, eval_size=1000, mlp=[512, 256, 
     train_dataset = SuperDataset(x_tr, y_tr)
     val_dataset = SuperDataset(x_val, y_val)
     train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=False)
+    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True)
 
     n_epochs = 10
     lr = 0.0005
@@ -295,14 +295,30 @@ def get_regression_model(input_size, mlp=[], dropout = 0.2, use_bn = False):
 
     # Define a wrapper class to make it work with scikit-learn
     class PyTorchModelWrapper(BaseEstimator, TransformerMixin):
-        def __init__(self):
+        def __init__(self, n_epochs=10, learning_rate=0.001):
+            self.n_epochs = n_epochs
+            self.learning_rate = learning_rate
             self.model = PyTorchModel()
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             self.model.to(self.device)
+            self.criterion = nn.MSELoss()
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+            self.scheduler = StepLR(self.optimizer, step_size=4, gamma=0.5)
 
-        def fit(self, X, y=None):
-            # Implement fit method which trains the model
-            # Convert X and y to PyTorch tensors and move to the correct device, then train
+        def fit(self, X, y):
+            X = X.clone().detach()
+            y = y.clone().detach()
+            print("")
+            print("Fitting model")
+            for epoch in range(self.n_epochs):
+                self.model.train()
+                self.optimizer.zero_grad()
+                outputs = self.model(X)
+                loss = self.criterion(outputs[:,0], y)
+                loss.backward()
+                self.optimizer.step()
+                self.scheduler.step()
+                print(f"----------Epoch{epoch}-------------")
             return self
 
         def transform(self, X):
@@ -327,11 +343,11 @@ if __name__ == '__main__':
     print("Data loaded!")
     # Utilize pretraining data by creating feature extractor which extracts lumo energy 
     # features from available initial features
-    feature_extractor =  make_feature_extractor(x_pretrain, y_pretrain, batch_size=64, mlp=[512, 256, 128])
+    feature_extractor =  make_feature_extractor(x_pretrain, y_pretrain, batch_size=64, mlp=[1024, 512, 256])
     PretrainedFeatureClass = make_pretraining_class({"pretrain": feature_extractor})
     
     # regression model
-    regression_model = get_regression_model(input_size=128, mlp = [64])
+    regression_model = get_regression_model(input_size=256, mlp = [128, 128])
 
     # y_pred = np.zeros(x_test.shape[0])
     # TODO: Implement the pipeline. It should contain feature extraction and regression. You can optionally
