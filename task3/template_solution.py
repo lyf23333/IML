@@ -20,7 +20,7 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 MARGIN = 1
 MARGIN_SEMI = 10
 
-def generate_embeddings():
+def generate_embeddings(model, embedding_name):
     """
     Transform, resize and normalize the images and then use a pretrained model to extract 
     the embeddings.
@@ -42,7 +42,7 @@ def generate_embeddings():
     # TODO: define a model for extraction of the embeddings (Hint: load a pretrained model,
     #  more info here: https://pytorch.org/vision/stable/models.html)
     # model = resnet50(pretrained=True)
-    model = resnet101(pretrained=True)
+    model = model(pretrained=True)
 
     embeddings = []
     embedding_size = 2048
@@ -61,7 +61,7 @@ def generate_embeddings():
             features = model(images)
             embeddings[i * train_loader.batch_size: (i + 1) * train_loader.batch_size] = features.cpu().numpy()
 
-    np.save('task3/dataset/embeddings_resnet101.npy', embeddings)
+    np.save(f'task3/dataset/embeddings_{embedding_name}.npy', embeddings)
 
 
 def get_data(file, embedding_file, train=True):
@@ -121,8 +121,7 @@ def create_loader_from_np(X, y = None, train = True, batch_size=64, shuffle=True
         dataset = TensorDataset(torch.from_numpy(X).type(torch.float))
     loader = DataLoader(dataset=dataset,
                         batch_size=batch_size,
-                        shuffle=shuffle,
-                        num_workers=num_workers)
+                        shuffle=shuffle)
     return loader
 
 # TODO: define a model. Here, the basic structure is defined, but you need to fill in the details
@@ -137,19 +136,15 @@ class Net(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(inp, hidden),
             nn.PReLU(),
-            # nn.BatchNorm1d(hidden),
+            nn.BatchNorm1d(hidden),
             nn.Dropout(d),
-            nn.Linear(hidden, 4096),
+            nn.Linear(hidden, hidden_1),
             nn.PReLU(),
-            # nn.BatchNorm1d(4096),
-            nn.Dropout(d),
-            nn.Linear(4096, hidden_1),
-            nn.PReLU(),
-            # nn.BatchNorm1d(hidden_1),
+            nn.BatchNorm1d(hidden_1),
             nn.Dropout(d),
             nn.Linear(hidden_1, hidden_2),
             nn.PReLU(),
-            # nn.BatchNorm1d(hidden_2),
+            nn.BatchNorm1d(hidden_2),
             nn.Dropout(d),
             nn.Linear(hidden_2, Net.EMBEDDING_DIM)
         )
@@ -172,8 +167,8 @@ def train_model(train_loader, val_loader, final_train=False):
     model = Net()
     model.train()
     model.to(device)
-    n_epochs = 30
-    title = "select_semihard_margin20"
+    n_epochs = 20
+    title = "bn"
 
     count = 0
     run_name = f"resnet_{title}_{count}"
@@ -376,24 +371,28 @@ def voting(results_list: list):
 # Main function. You don't have to change this
 if __name__ == '__main__':
     embedding_list = ['resnet50', 'resnet101', 'resnet152']
+    model_list = {"resnet50": resnet50, "resnet101": resnet101, "resnet152": resnet152}
     result_list = []
     for embedding in embedding_list:
-        # TRAIN_TRIPLETS = 'task3/train_triplets.txt'
+        TRAIN_TRIPLETS_ALL = 'task3/train_triplets.txt'
         TRAIN_TRIPLETS = 'task3/train_triplets_split.txt'
         VAL_TRIPLETS = 'task3/validation_triplets_split.txt'
         TEST_TRIPLETS = 'task3/test_triplets.txt'
         save_file = 'task3/results_' + embedding + '.txt'
         embedding_file = 'task3/dataset/embeddings_' + embedding + '.npy'
         result_list.append(save_file)
-        final_train = False
+        final_train = True
 
         # generate embedding for each image in the dataset
-        # if(os.path.exists('task3/dataset/embeddings_resnet50.npy') == False):
-        # generate_embeddings()
-        # print("find embeddings")
+        if (os.path.exists(embedding_file) == False):
+            generate_embeddings(model=model_list[embedding], embedding_name=embedding)
+        print(f"find embedding {embedding}")
 
         # load the training and testing data
-        X_train, y_train = get_data(TRAIN_TRIPLETS, embedding_file)
+        if final_train:
+            X_train, y_train = get_data(TRAIN_TRIPLETS_ALL, embedding_file)
+        else:
+            X_train, y_train = get_data(TRAIN_TRIPLETS, embedding_file)
         X_val, y_val = get_data(VAL_TRIPLETS, embedding_file)
         X_test, _ = get_data(TEST_TRIPLETS, embedding_file, train=False)
         # Create data loaders for the training and testing data
