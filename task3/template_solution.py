@@ -18,6 +18,8 @@ from torchvision.models import resnet50, resnet101, resnet152
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+
+
 def generate_embeddings():
     """
     Transform, resize and normalize the images and then use a pretrained model to extract 
