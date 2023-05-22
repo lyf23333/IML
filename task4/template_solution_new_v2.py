@@ -172,7 +172,7 @@ def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, w
                     loss = criterion(y, torch.squeeze(y_pred))
                     valid_loss_epoch += loss.item()
             scheduler.step(np.sqrt(valid_loss_epoch / len(val_dataset)))
-            if (epoch % 4) == 0:
+            if (epoch % 10) == 0:
                 print(optimizer.param_groups[0]['lr'])
                 # scheduler.step()
                 print(f"[{epoch}] Training loss {np.sqrt(train_loss_epoch / len(train_dataset)):6.3f}, Validation loss {np.sqrt(valid_loss_epoch / len(val_dataset)):6.3f}")
@@ -228,7 +228,7 @@ if __name__ == '__main__':
         x_embedding = Predictor.extraction(x_train)
         x_embedding = x_embedding.clone().detach().cpu().numpy()
     Gap = GapNet(model_layer=model_layer)
-    trainer(x_embedding, y_train, Gap, batch_size=4, n_epochs=29, lr=0.003, retrain=True, weight_decay=0.005, eval_size=10)
+    trainer(x_embedding, y_train, Gap, batch_size=4, n_epochs=2000, lr=0.003, retrain=True, weight_decay=0.005, eval_size=10)
     # save weights
     torch.save(Gap.state_dict(), os.path.join(OUT_DIR, GAP_FILE))
     print("save gap weights. ")
