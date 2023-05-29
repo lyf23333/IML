@@ -132,50 +132,52 @@ class GapNet(nn.Module):
 
 
 
-def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, weight_decay=0, retrain=True):
-    x_tr, x_val, y_tr, y_val = train_test_split(x, y, test_size=eval_size, random_state=0, shuffle=True)
-    x_tr, x_val = torch.tensor(x_tr, dtype=torch.float), torch.tensor(x_val, dtype=torch.float)
-    y_tr, y_val = torch.tensor(y_tr, dtype=torch.float), torch.tensor(y_val, dtype=torch.float)
-    train_dataset = TensorDataset(x_tr, y_tr)
-    val_dataset = TensorDataset(x_val, y_val)
-    train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True)
+def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, weight_decay=0, retrain=True, cv=False):
+    a = np.random.randint(100, 5)
+    for random_state in a:
+        x_tr, x_val, y_tr, y_val = train_test_split(x, y, test_size=eval_size, random_state=random_state, shuffle=True)
+        x_tr, x_val = torch.tensor(x_tr, dtype=torch.float), torch.tensor(x_val, dtype=torch.float)
+        y_tr, y_val = torch.tensor(y_tr, dtype=torch.float), torch.tensor(y_val, dtype=torch.float)
+        train_dataset = TensorDataset(x_tr, y_tr)
+        val_dataset = TensorDataset(x_val, y_val)
+        train_loader = DataLoader(dataset=train_dataset, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=batch_size, shuffle=True)
 
-    # optimizer = optim.Adam(model.parameters(), lr=lr)
-    optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    # scheduler = StepLR(optimizer, step_size=500, gamma=0.5)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.75, patience=5)
-    criterion = nn.MSELoss(reduction="sum")
+        # optimizer = optim.Adam(model.parameters(), lr=lr)
+        optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        # scheduler = StepLR(optimizer, step_size=500, gamma=0.5)
+        scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.75, patience=5)
+        criterion = nn.MSELoss(reduction="sum")
 
-    if retrain:
-        model.to(device)
-        model.train(True)
-        for epoch in range(n_epochs):
-            train_loss_epoch = 0.0
-            for x, y in train_loader:
-                x = x.to(device)
-                y = y.to(device)
-                optimizer.zero_grad()
-                y_pred = model(x)
-                loss = criterion(y, torch.squeeze(y_pred))
-                loss.backward()
-                optimizer.step()
-                train_loss_epoch += loss.item()
-
-            valid_loss_epoch = 0.0
-            model.eval()
-            with torch.no_grad():
-                for x, y in val_loader:
+        if retrain:
+            model.to(device)
+            model.train(True)
+            for epoch in range(n_epochs):
+                train_loss_epoch = 0.0
+                for x, y in train_loader:
                     x = x.to(device)
                     y = y.to(device)
+                    optimizer.zero_grad()
                     y_pred = model(x)
                     loss = criterion(y, torch.squeeze(y_pred))
-                    valid_loss_epoch += loss.item()
-            scheduler.step(np.sqrt(valid_loss_epoch / len(val_dataset)))
-            if (epoch % 10) == 0:
-                print(optimizer.param_groups[0]['lr'])
-                # scheduler.step()
-                print(f"[{epoch}] Training loss {np.sqrt(train_loss_epoch / len(train_dataset)):6.3f}, Validation loss {np.sqrt(valid_loss_epoch / len(val_dataset)):6.3f}")
+                    loss.backward()
+                    optimizer.step()
+                    train_loss_epoch += loss.item()
+
+                valid_loss_epoch = 0.0
+                model.eval()
+                with torch.no_grad():
+                    for x, y in val_loader:
+                        x = x.to(device)
+                        y = y.to(device)
+                        y_pred = model(x)
+                        loss = criterion(y, torch.squeeze(y_pred))
+                        valid_loss_epoch += loss.item()
+                scheduler.step(np.sqrt(valid_loss_epoch / len(val_dataset)))
+                if (epoch % 50) == 0:
+                    print(optimizer.param_groups[0]['lr'])
+                    # scheduler.step()
+                    print(f"[{epoch}] Training loss {np.sqrt(train_loss_epoch / len(train_dataset)):6.3f}, Validation loss {np.sqrt(valid_loss_epoch / len(val_dataset)):6.3f}")
 
 if __name__ == '__main__':
     # ============
@@ -228,7 +230,8 @@ if __name__ == '__main__':
         x_embedding = Predictor.extraction(x_train)
         x_embedding = x_embedding.clone().detach().cpu().numpy()
     Gap = GapNet(model_layer=model_layer)
-    trainer(x_embedding, y_train, Gap, batch_size=4, n_epochs=2000, lr=0.003, retrain=True, weight_decay=0.005, eval_size=10)
+    trainer(x_embedding, y_train, Gap, batch_size=4, n_epochs=200, lr=0.003, retrain=True, weight_decay=0.005, eval_size=10, cv = True)
+    
     # save weights
     torch.save(Gap.state_dict(), os.path.join(OUT_DIR, GAP_FILE))
     print("save gap weights. ")

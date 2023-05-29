@@ -79,7 +79,7 @@ class PredictorNet(nn.Module):
         return x
 
 
-def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, weight_decay=0, retrain=True):
+def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, weight_decay=0, retrain=True, patience=5):
     x_tr, x_val, y_tr, y_val = train_test_split(x, y, test_size=eval_size, random_state=0, shuffle=True)
     x_tr, x_val = torch.tensor(x_tr, dtype=torch.float), torch.tensor(x_val, dtype=torch.float)
     y_tr, y_val = torch.tensor(y_tr, dtype=torch.float), torch.tensor(y_val, dtype=torch.float)
@@ -93,6 +93,10 @@ def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, w
     # scheduler = StepLR(optimizer, step_size=500, gamma=0.5)
     scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.75, patience=5)
     criterion = nn.MSELoss(reduction="sum")
+
+    best_valid_loss = float('inf')
+    counter = 0
+    patience = patience
 
     if retrain:
         model.to(device)
@@ -123,6 +127,16 @@ def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, w
                 print(optimizer.param_groups[0]['lr'])
                 # scheduler.step()
                 print(f"[{epoch}] Training loss {np.sqrt(train_loss_epoch / len(train_dataset)):6.3f}, Validation loss {np.sqrt(valid_loss_epoch / len(val_dataset)):6.3f}")
+            # Early stopping
+            if valid_loss_epoch < best_valid_loss:
+                best_valid_loss = valid_loss_epoch
+                counter = 0  # Reset counter
+            else:
+                counter += 1  # Increment counter
+                if counter >= patience:
+                    print('Early stopping')
+                    break  # Break out from the loop
+
 
 def trainer_sklearn(x, y, model, eval_size=100, nfold=5, all_data = False):
 
@@ -159,19 +173,34 @@ if __name__ == '__main__':
     print("Data loaded!")
 
     # ============
+    # train autoencoder
+    # ============
+    predictor_layer = [1000, 1024]
+    ae_predictor_decoder_layer = predictor_layer[::-1]
+    predictor_decoder_layer = [1024, 1]
+
+    # Train Predictor
+    Autoconder = PredictorNet(predictor_layer=predictor_layer, predictor_decoder_layer=ae_predictor_decoder_layer, dropout=0.5)
+    # save weights
+    print("-----------------------------Training autocoender------------------")
+    trainer(x_pretrain, x_pretrain, Autoconder, batch_size=32, n_epochs=50, lr=0.0005, retrain=True, eval_size=5000, patience=10)
+
+    # ============
     # train
     # ============
 
-    predictor_layer = [1000, 1024]
-    predictor_decoder_layer = [1024, 1]
-    model_layer = [4, 2, 1]
+    # predictor_layer = [1000, 1024]
+    # predictor_decoder_layer = [1024, 1]
 
     # Train Predictor
+    print("-----------------------------Training Predictor------------------")
     Predictor = PredictorNet(predictor_layer=predictor_layer, predictor_decoder_layer=predictor_decoder_layer, dropout=0.5)
+    encoder_state_dict = Autoconder.predictor.state_dict()
+    Predictor.predictor.load_state_dict(encoder_state_dict)
     retrain = True
     # save weights
     if retrain:
-        trainer(x_pretrain, y_pretrain, Predictor, batch_size=32, n_epochs=30, lr=0.0005, retrain=retrain, eval_size=5000)
+        trainer(x_pretrain, y_pretrain, Predictor, batch_size=32, n_epochs=30, lr=0.0005, retrain=retrain, eval_size=5000, patience=10)
         torch.save(Predictor.state_dict(), os.path.join(OUT_DIR, PREDICTOR_FILE))
         print("save predictor weights. ")
     else:
@@ -182,19 +211,7 @@ if __name__ == '__main__':
     Predictor.eval()
     with torch.no_grad():
         x_embedding = Predictor.extraction(x_train)
-        
-
-        # mean = x_embedding.mean(dim=0, keepdim=True)
-        # std = x_embedding.std(dim=0, keepdim=True)
-
-        # # Add small constant to avoid division by zero
-        # epsilon = 1e-7
-
-        # # Normalize the data
-        # x_embedding = (x_embedding - mean) / (std + epsilon)
-
         x_embedding = x_embedding.clone().detach().cpu().numpy()
-
     Gap = linear_model.BayesianRidge()  
     Gap = trainer_sklearn(x_embedding, y_train, Gap, eval_size=10, nfold=10, all_data=False)
 
