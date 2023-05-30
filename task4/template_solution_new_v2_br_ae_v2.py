@@ -211,7 +211,7 @@ if __name__ == '__main__':
     trainer(x_pretrain, x_pretrain, Autoencoder, batch_size=32, n_epochs=50, lr=0.0002, retrain=True, eval_size=5000, patience=10)
 
     # ============
-    # train
+    # train Predictor
     # ============
 
     predictor_layer = [512, 128]
@@ -221,7 +221,6 @@ if __name__ == '__main__':
     with torch.no_grad():
         x_embedding = Autoencoder.extraction(x_pretrain)
 
-    # Train Predictor
     print("-----------------------------Training Predictor------------------")
     Predictor = PredictorNet(predictor_layer=predictor_layer, predictor_decoder_layer=predictor_decoder_layer, dropout=0.5)
     retrain = True
@@ -233,8 +232,10 @@ if __name__ == '__main__':
     else:
         Predictor.load_state_dict(torch.load(os.path.join(OUT_DIR, PREDICTOR_FILE)))
 
-    # Train GapNet
-    # Encoder & Predictor
+    # ============
+    # train Gapnet
+    # ============
+
     Predictor.eval()
     Autoencoder.eval()
     with torch.no_grad():
