@@ -12,6 +12,8 @@ from sklearn.model_selection import train_test_split
 from sklearn import linear_model
 from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import KFold
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
 
 TITLE = "ONLY PREDICTOR"
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -171,7 +173,6 @@ def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, w
 
 
 def trainer_sklearn(x, y, model, eval_size=100, nfold=5, all_data = False):
-
     if all_data:
         w = model.fit(x, y)
     else:
@@ -187,14 +188,6 @@ def trainer_sklearn(x, y, model, eval_size=100, nfold=5, all_data = False):
             all_score[j] = score
             print(f"mean square error {j}th round: {score}")
         print(f"mean square error over all: {np.mean(all_score)}")
-    # x_tr, x_val, y_tr, y_val = train_test_split(x, y, test_size=eval_size, random_state=0, shuffle=True)
-    # model.fit(x_tr, y_tr)
-    # # Predict on the validation data
-    # y_pred = model.predict(x_val)
-
-    # # Compute and print the R2 score
-    # score = mean_squared_error(y_val, y_pred)
-    # print(f"mean square error: {score}")
     return model
 
 if __name__ == '__main__':
@@ -231,8 +224,6 @@ if __name__ == '__main__':
     # Train Predictor
     print("-----------------------------Training Predictor------------------")
     Predictor = PredictorNet(predictor_layer=predictor_layer, predictor_decoder_layer=predictor_decoder_layer, dropout=0.5)
-    # encoder_state_dict = Autoencoder.predictor.state_dict()
-    # Predictor.predictor.load_state_dict(encoder_state_dict)
     retrain = True
     # save weights
     if retrain:
@@ -251,6 +242,14 @@ if __name__ == '__main__':
         x_embedding = Predictor.extraction(x_embedding_ae)
         x_embedding = x_embedding.clone().detach().cpu().numpy()
     Gap = linear_model.BayesianRidge()  
+
+    # ## Gaussian process 0.226 best
+    # kernel_rbf = RBF(length_scale=2.0)
+    # kernel_constant = ConstantKernel(constant_value=0.5)
+    # kernel_white = WhiteKernel(noise_level=0.2)
+    # kernel = kernel_rbf + kernel_constant + kernel_white
+    # Gap = GaussianProcessRegressor(kernel=kernel)
+
     Gap = trainer_sklearn(x_embedding, y_train, Gap, eval_size=10, nfold=10, all_data=False)
 
     # ============
