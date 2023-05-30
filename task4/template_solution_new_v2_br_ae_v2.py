@@ -47,6 +47,38 @@ def load_data():
     return x_pretrain, y_pretrain, x_train, y_train, x_test
 
 
+class AutoencoderNet(nn.Module):
+    def __init__(self, predictor_layer=[], predictor_decoder_layer=[], dropout=0.5):
+        super().__init__()
+        # define your model layers here
+
+        # predictor
+        layers = []
+        for i in range(len(predictor_layer) - 2):
+            layers += [nn.Linear(predictor_layer[i], predictor_layer[i + 1]), nn.ELU(), nn.Dropout(dropout)]
+        layers += [nn.Linear(predictor_layer[-2], predictor_layer[-1])]
+        self.predictor = nn.Sequential(*layers)
+        # predictor_decoder
+        layers = []
+        for i in range(len(predictor_decoder_layer) - 2):
+            layers += [nn.Linear(predictor_decoder_layer[i], predictor_decoder_layer[i + 1]), nn.ELU(), nn.Dropout(dropout)]
+        layers += [nn.Linear(predictor_decoder_layer[-2], predictor_decoder_layer[-1])]
+        self.predictor_decoder = nn.Sequential(*layers)
+
+    def forward(self, x):
+        # define your forward pass here
+        x = self.predictor(x)
+        x = self.predictor_decoder(x)
+        return x
+
+    def extraction(self, x):
+        # defined in the constructor.
+        if isinstance(x, np.ndarray):
+            x = torch.tensor(x).to(device).to(torch.float32)
+        x = self.predictor(x)
+        return x
+
+
 class PredictorNet(nn.Module):
     def __init__(self, predictor_layer=[], predictor_decoder_layer=[], dropout=0.5):
         super().__init__()
@@ -91,7 +123,7 @@ def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, w
     # optimizer = optim.Adam(model.parameters(), lr=lr)
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     # scheduler = StepLR(optimizer, step_size=500, gamma=0.5)
-    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.75, patience=5)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.5, patience=3)
     criterion = nn.MSELoss(reduction="sum")
 
     best_valid_loss = float('inf')
@@ -123,10 +155,10 @@ def trainer(x, y, model, batch_size=64, eval_size=100, n_epochs=20, lr=0.0005, w
                     loss = criterion(y, torch.squeeze(y_pred))
                     valid_loss_epoch += loss.item()
             scheduler.step(np.sqrt(valid_loss_epoch / len(val_dataset)))
-            if (epoch % 5) == 0:
+            if (epoch % 2) == 0:
                 print(optimizer.param_groups[0]['lr'])
                 # scheduler.step()
-                print(f"[{epoch}] Training loss {np.sqrt(train_loss_epoch / len(train_dataset)):6.3f}, Validation loss {np.sqrt(valid_loss_epoch / len(val_dataset)):6.3f}")
+                print(f"[{epoch}] Training loss {np.sqrt(train_loss_epoch / len(train_loader)):6.3f}, Validation loss {np.sqrt(valid_loss_epoch / len(val_loader)):6.3f}")
             # Early stopping
             if valid_loss_epoch < best_valid_loss:
                 best_valid_loss = valid_loss_epoch
@@ -166,6 +198,7 @@ def trainer_sklearn(x, y, model, eval_size=100, nfold=5, all_data = False):
     return model
 
 if __name__ == '__main__':
+    start = time.time()
     # ============
     # Load data
     # ============
@@ -179,17 +212,17 @@ if __name__ == '__main__':
     ae_predictor_decoder_layer = predictor_layer[::-1]
 
     # Train Predictor
-    Autoencoder = PredictorNet(predictor_layer=predictor_layer, predictor_decoder_layer=ae_predictor_decoder_layer, dropout=0.5)
+    Autoencoder = AutoencoderNet(predictor_layer=predictor_layer, predictor_decoder_layer=ae_predictor_decoder_layer, dropout=0.5)
     # save weights
     print("-----------------------------Training autocoender------------------")
-    trainer(x_pretrain, x_pretrain, Autoencoder, batch_size=32, n_epochs=5, lr=0.0005, retrain=True, eval_size=5000, patience=10)
+    trainer(x_pretrain, x_pretrain, Autoencoder, batch_size=32, n_epochs=50, lr=0.0002, retrain=True, eval_size=5000, patience=10)
 
     # ============
     # train
     # ============
 
-    predictor_layer = [512, 512]
-    predictor_decoder_layer = [512, 1]
+    predictor_layer = [512, 128]
+    predictor_decoder_layer = [128, 1]
 
     Autoencoder.eval()
     with torch.no_grad():
@@ -203,7 +236,7 @@ if __name__ == '__main__':
     retrain = True
     # save weights
     if retrain:
-        trainer(x_embedding, y_pretrain, Predictor, batch_size=32, n_epochs=5, lr=0.0005, retrain=retrain, eval_size=5000, patience=10)
+        trainer(x_embedding, y_pretrain, Predictor, batch_size=32, n_epochs=30, lr=0.0005, retrain=retrain, eval_size=5000, patience=10)
         torch.save(Predictor.state_dict(), os.path.join(OUT_DIR, PREDICTOR_FILE))
         print("save predictor weights. ")
     else:
@@ -230,6 +263,8 @@ if __name__ == '__main__':
         x_embedding = x_embedding.clone().detach().cpu().numpy()
         y_pred = Gap.predict(x_embedding)
 
+    end = time.time()
+    print(f"Time spent: {(end-start)}s")
 
     assert y_pred.shape == (x_test.shape[0],)
     y_pred = pd.DataFrame({"y": y_pred}, index=x_test.index)
